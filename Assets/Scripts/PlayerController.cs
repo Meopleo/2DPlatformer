@@ -1,21 +1,22 @@
 using UnityEngine;
+using UnityEngine.SceneManagement;
 
 [RequireComponent(typeof(Rigidbody2D))]
-[RequireComponent(typeof(LineRenderer))] // A célzóvonalhoz szükséges komponens
+[RequireComponent(typeof(LineRenderer))]
 public class PlayerController : MonoBehaviour
 {
     [Header("Fizika és Erő")]
-    [SerializeField] private float launchForceMultiplier = 5f; // Erőszorzó a kilövéshez
-    [SerializeField] private float maxForce = 20f;             // Maximális kilövési erő
-    [SerializeField] private float iceDamping = 10f; // Mennyire fékezzen le a jég
-
+    [SerializeField] private float launchForceMultiplier = 5f;
+    [SerializeField] private float maxForce = 20f;
+    [SerializeField] private float iceDamping = 10f;
 
     [Header("Játékmenet Beállítások")]
-    [SerializeField] private int maxJumps = 3;                 // Alapértelmezett lövések száma
+    [SerializeField] private int maxJumps = 3;
+
+    public float menuHeight = 6f;
 
     [Header("Vizuális Beállítások")]
     [SerializeField] private float lineWidth = 0.05f;
-
 
     private Rigidbody2D rb;
     private Camera mainCamera;
@@ -25,141 +26,125 @@ public class PlayerController : MonoBehaviour
     private Vector2 dragEndPos;
     private bool isDragging = false;
     private int currentJumps;
-    private bool isSticky = false; // Falon vagyunk-e éppen
+    private bool isSticky = false;
+    private float lastJumpTime;
 
     private void Start()
     {
         rb = GetComponent<Rigidbody2D>();
-        lr = GetComponent<LineRenderer>(); // Lekérjük a Line Renderert
-
-        mainCamera = Camera.main; // Kamera gyorsítótárazása (cache-elés a teljesítményért)
+        lr = GetComponent<LineRenderer>();
+        mainCamera = Camera.main;
 
         lr.startWidth = lineWidth;
         lr.endWidth = lineWidth;
-
-        lr.enabled = false; // A játék elején elrejtjük a vonalat
+        lr.enabled = false;
         currentJumps = maxJumps;
     }
 
     private void Update()
     {
+        if (transform.position.y < menuHeight)
+        {
+            currentJumps = maxJumps;
+        }
+
         HandleInput();
+        CheckFallDeath();
+    }
+
+    private void CheckFallDeath()
+    {
+        float screenBottomEdge = mainCamera.transform.position.y - mainCamera.orthographicSize;
+        if (transform.position.y < screenBottomEdge - 0.5f)
+        {
+            Debug.Log("Kiestél a képernyőről! Újraindítás...");
+            RestartLevel();
+        }
     }
 
     private void HandleInput()
     {
-        // Ha elfogyott a lövés és nem vagyunk falon, nem engedünk lőni (lezuhan)
         if (currentJumps <= 0 && !isSticky) return;
 
-        // 1. Kattintás / Érintés kezdete
         if (Input.GetMouseButtonDown(0))
         {
             isDragging = true;
             dragStartPos = mainCamera.ScreenToWorldPoint(Input.mousePosition);
-            lr.enabled = true; // Vonal bekapcsolása
+            lr.enabled = true;
         }
 
-        // 2. Húzás (Célzás)
         if (Input.GetMouseButton(0) && isDragging)
         {
             dragEndPos = mainCamera.ScreenToWorldPoint(Input.mousePosition);
-            DrawTrajectory(); // Vonal frissítése folyamatosan
+            DrawTrajectory();
         }
 
-        // 3. Elengedés (Kilövés)
         if (Input.GetMouseButtonUp(0) && isDragging)
         {
             isDragging = false;
-            lr.enabled = false; // Vonal eltüntetése kilövéskor
+            lr.enabled = false;
             LaunchPlayer();
         }
     }
 
     private void DrawTrajectory()
     {
-        // Kiszámoljuk a lövés irányát
         Vector2 launchDirection = dragStartPos - dragEndPos;
-
-        // Kiszámoljuk az erőt, de itt is limitáljuk, hogy a vonal ne nőjön a végtelenségig
         float forceMagnitude = Mathf.Clamp(launchDirection.magnitude * launchForceMultiplier, 0f, maxForce);
-
-        // A vonal kezdőpontja a karakter közepe
         Vector3 startPoint = transform.position;
-
-        // A végpont a kiszámolt irány, megszorozva a limitált erővel (visszaosztva a szorzóval, hogy a vonal arányos maradjon)
         Vector3 endPoint = startPoint + (Vector3)(launchDirection.normalized * (forceMagnitude / launchForceMultiplier));
-
-        // Beállítjuk a vonal két végpontját (0. pont és 1. pont)
         lr.SetPosition(0, startPoint);
         lr.SetPosition(1, endPoint);
     }
 
     private void LaunchPlayer()
     {
-        // Kiszámoljuk a húzás irányát és távolságát (Vektor kivonás)
-        // Mivel csúzli, az ellentétes irányba kell lőnünk, mint amerre húztuk
         Vector2 launchDirection = dragStartPos - dragEndPos;
-
-        // Az erő nagysága a vektor hossza szorozva a szorzónkkal
         float forceMagnitude = Mathf.Clamp(launchDirection.magnitude * launchForceMultiplier, 0f, maxForce);
 
-        // Ha a játékos falon állt, elengedjük a fixálást
-        DetachFromWall();
+        // ---> INNEN VETTÜK KI A GYENGÍTÉST! <---
+        // Mostantól szabadon, teljes erőből repülhetsz a menüben is.
 
-        // Fizikai erő alkalmazása (Impulzus szerűen, azonnali sebességváltozás)
+        DetachFromWall();
         rb.AddForce(launchDirection.normalized * forceMagnitude, ForceMode2D.Impulse);
 
-        // Csökkentjük a lövések számát
         currentJumps--;
-        Debug.Log($"Lövések száma: {currentJumps}");
+        lastJumpTime = Time.time;
     }
 
+    private void OnCollisionEnter2D(Collision2D collision) { TryAttach(collision); }
+    private void OnCollisionStay2D(Collision2D collision) { TryAttach(collision); }
 
-
-    // 1. Szilárd testeknek ütközés (Tapadós platform)
-    private void OnCollisionEnter2D(Collision2D collision)
+    private void TryAttach(Collision2D collision)
     {
-        // Csak akkor tapadunk oda, ha "Sticky" a címkéje
-        if (collision.gameObject.CompareTag("Sticky"))
+        // JAVÍTÁS: 0.1f-ről 0.02f-re csökkentettük a várakozást!
+        // Így hiába lősz ki izomból egy közeli falra, a szörny azonnal tapadni fog, és nem pattan le.
+        if (Time.time > lastJumpTime + 0.02f && !isSticky)
         {
-            AttachToWall();
+            if (collision.gameObject.CompareTag("Sticky"))
+            {
+                AttachToWall();
+            }
         }
-        // Ha nem Sticky (pl. zöld csúszós fal), akkor a Unity fizikája 
-        // magától lepattint róla minket, a kódnak nincs dolga vele!
     }
 
-    // 2. "Szellem" testekbe lépés (Jégmező amin átmegyünk)
+    private void OnCollisionExit2D(Collision2D collision)
+    {
+        if (collision.gameObject.CompareTag("Sticky")) DetachFromWall();
+    }
+
     private void OnTriggerEnter2D(Collider2D collision)
     {
-        if (collision.gameObject.CompareTag("Ice"))
-        {
-            // Amikor belépünk a jégbe, ráadjuk a hatalmas légellenállást
-            rb.linearDamping = iceDamping;
-        }
+        if (collision.gameObject.CompareTag("Ice")) rb.linearDamping = iceDamping;
+        if (collision.gameObject.CompareTag("Spike")) RestartLevel();
     }
 
-    // 3. Kilépés a "Szellem" testekből
     private void OnTriggerExit2D(Collider2D collision)
     {
-        if (collision.gameObject.CompareTag("Ice"))
-        {
-            // Ha kijöttünk a jégből, visszaállítjuk a normál közeget
-            rb.linearDamping = 0f;
-        }
+        if (collision.gameObject.CompareTag("Ice")) rb.linearDamping = 0f;
     }
 
-    private void AttachToWall()
-    {
-        isSticky = true;
-        rb.linearVelocity = Vector2.zero; // Megállítja a mozgást
-        rb.gravityScale = 0f;             // Kikapcsolja a zuhanást
-        currentJumps = maxJumps;          // Újratölti a lövéseket
-        Debug.Log("Falon vagyunk, lövések újratöltve!");
-    }
-
-    private void DetachFromWall()
-    {
-        isSticky = false;
-        rb.gravityScale = 1f; // Visszakapcsoljuk a normál gravitációt
-    }
+    private void RestartLevel() { SceneManager.LoadScene(SceneManager.GetActiveScene().name); }
+    private void AttachToWall() { isSticky = true; rb.linearVelocity = Vector2.zero; rb.gravityScale = 0f; currentJumps = maxJumps; }
+    private void DetachFromWall() { isSticky = false; rb.gravityScale = 1f; }
 }
